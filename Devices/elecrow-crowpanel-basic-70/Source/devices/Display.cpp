@@ -24,15 +24,15 @@ std::shared_ptr<tt::hal::display::DisplayDevice> createDisplay() {
     esp_lcd_rgb_panel_config_t rgb_panel_config = {
         .clk_src = LCD_CLK_SRC_DEFAULT,
         .timings = {
-            .pclk_hz = 15000000,
+            .pclk_hz = 16000000,
             .h_res = 800,
             .v_res = 480,
-            .hsync_pulse_width = 4,
-            .hsync_back_porch = 43,
-            .hsync_front_porch = 8,
-            .vsync_pulse_width = 4,
-            .vsync_back_porch = 12,
-            .vsync_front_porch = 8,
+            .hsync_pulse_width = 48,
+            .hsync_back_porch = 13,
+            .hsync_front_porch = 40,
+            .vsync_pulse_width = 31,
+            .vsync_back_porch = 13,
+            .vsync_front_porch = 1,
             .flags = {
                 .hsync_idle_low = false,
                 .vsync_idle_low = false,
@@ -48,27 +48,27 @@ std::shared_ptr<tt::hal::display::DisplayDevice> createDisplay() {
         .sram_trans_align = 8,
         .psram_trans_align = 64,
         .hsync_gpio_num = GPIO_NUM_39,
-        .vsync_gpio_num = GPIO_NUM_41,
-        .de_gpio_num = GPIO_NUM_40 ,
+        .vsync_gpio_num = GPIO_NUM_40,
+        .de_gpio_num = GPIO_NUM_41 ,
         .pclk_gpio_num = GPIO_NUM_0,
         .disp_gpio_num = GPIO_NUM_NC,
         .data_gpio_nums = {
-            GPIO_NUM_8, // B0
-            GPIO_NUM_3, // B1
-            GPIO_NUM_46, // B2
-            GPIO_NUM_9, // B3
-            GPIO_NUM_1, // B4
-            GPIO_NUM_5, // G0
-            GPIO_NUM_6, // G1
-            GPIO_NUM_7, // G2
-            GPIO_NUM_15, // G3
+            GPIO_NUM_15, // B0
+            GPIO_NUM_7, // B1
+            GPIO_NUM_6, // B2
+            GPIO_NUM_5, // B3
+            GPIO_NUM_4, // B4
+            GPIO_NUM_9, // G0
+            GPIO_NUM_46, // G1
+            GPIO_NUM_3, // G2
+            GPIO_NUM_8, // G3
             GPIO_NUM_16, // G4
-            GPIO_NUM_4, // G5
-            GPIO_NUM_45, // R0
-            GPIO_NUM_48, // R1
+            GPIO_NUM_1, // G5
+            GPIO_NUM_14, // R0
+            GPIO_NUM_21, // R1
             GPIO_NUM_47, // R2
-            GPIO_NUM_21, // R3
-            GPIO_NUM_14, // R4
+            GPIO_NUM_48, // R3
+            GPIO_NUM_45, // R4
         },
         .flags = {
             .disp_active_low = false,
