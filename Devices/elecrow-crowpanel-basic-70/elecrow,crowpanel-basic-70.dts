@@ -8,7 +8,7 @@
 
 / {
 	compatible = "root";
-	model = "Elecrow CrowPanel Basic 5.0";
+	model = "Elecrow CrowPanel Basic 7.0";
 
 	gpio0 {
 		compatible = "espressif,esp32-gpio";
