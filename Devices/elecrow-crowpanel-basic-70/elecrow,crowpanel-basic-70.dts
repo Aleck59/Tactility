@@ -22,7 +22,14 @@
 		pin-sda = <&gpio0 19 GPIO_FLAG_NONE>;
 		pin-scl = <&gpio0 20 GPIO_FLAG_NONE>;
 	};
-
+	i2s0 {
+		compatible = "espressif,esp32-i2s";
+		status = "disabled";
+		port = <I2S_NUM_0>;
+		pin-bclk = <&gpio0 42 GPIO_FLAG_NONE>;
+		pin-ws = <&gpio0 18 GPIO_FLAG_NONE>;
+		pin-data-out = <&gpio0 17 GPIO_FLAG_NONE>;
+	};
 	sdcard_spi: spi0 {
 		compatible = "espressif,esp32-spi";
 		host = <SPI2_HOST>;
