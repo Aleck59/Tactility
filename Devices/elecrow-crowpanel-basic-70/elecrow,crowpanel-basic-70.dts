@@ -15,7 +15,7 @@
 
 / {
 	compatible = "root";
-	model = "Elecrow CrowPanel Basic 5.0";
+	model = "Elecrow CrowPanel Basic 7.0";
 
 	wifi0 {
 		compatible = "espressif,esp32-wifi-pinned";
@@ -82,12 +82,12 @@
 		horizontal-resolution = <800>;
 		vertical-resolution = <480>;
 		pixel-clock-hz = <15000000>;
-		hsync-pulse-width = <4>;
-		hsync-back-porch = <43>;
-		hsync-front-porch = <8>;
-		vsync-pulse-width = <4>;
-		vsync-back-porch = <12>;
-		vsync-front-porch = <8>;
+		hsync-pulse-width = <48>;
+		hsync-back-porch = <13>;
+		hsync-front-porch = <40>;
+		vsync-pulse-width = <31>;
+		vsync-back-porch = <13>;
+		vsync-front-porch = <1>;
 		pclk-active-neg;
 		num-fbs = <2>;
 		double-fb;
