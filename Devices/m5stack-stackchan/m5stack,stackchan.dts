@@ -22,6 +22,15 @@
 #include <bindings/ili9341.h>
 #include <bindings/ina226.h>
 #include <bindings/py32ioexpander.h>
+#include <bindings/aw9523b.h>
+#include <bindings/axp2101.h>
+#include <bindings/axp2101_backlight.h>
+#include <bindings/ft6x36.h>
+#include <bindings/aw88298.h>
+#include <bindings/es7210.h>
+#include <bindings/ili9341.h>
+#include <tactility/bindings/esp32_sdspi.h>
+#include <tactility/bindings/gpio_hog.h>
 
 // Reference: https://docs.m5stack.com/en/StackChan
 / {
@@ -111,6 +120,39 @@
 			};
 		};
 
+		// Same rail assignment as CoreS3: ALDO1=AW88298, ALDO2=ES7210, ALDO3=camera
+		// (not yet implemented, but harmless to power), ALDO4=TF/SD card. BLDO1/BLDO2 are
+		// enabled with no specific voltage requirement.
+		axp2101 {
+			compatible = "x-powers,axp2101";
+			reg = <0x34>;
+			aldo1-millivolt = <1800>;
+			aldo1-enabled;
+			aldo2-millivolt = <3300>;
+			aldo2-enabled;
+			aldo3-millivolt = <3300>;
+			aldo3-enabled;
+			aldo4-millivolt = <3300>;
+			aldo4-enabled;
+			bldo1-enabled;
+			bldo2-enabled;
+
+			display_backlight: backlight {
+				compatible = "axp2101-backlight";
+				ldo = <AXP2101_DLDO1>;
+				min-millivolt = <2500>;
+				max-millivolt = <3300>;
+			};
+		};
+
+		touch0 {
+			compatible = "focaltech,ft6x36";
+			reg = <0x38>;
+			x-max = <319>;
+			y-max = <239>;
+			pin-reset = <&aw9523b 0 GPIO_FLAG_NONE>;
+		};
+
 		aw88298 {
 			compatible = "awinic,aw88298";
 			reg = <0x36>;
@@ -170,6 +212,27 @@
 		// TODO: GC0308 camera @ 0x21 — requires i2c_master driver, not yet available
 		// TODO: LTR-553ALS-WA proximity/light @ 0x23 — no driver yet
 		// TODO: BMM150 magnetometer @ 0x10 — accessible only via BMI270 aux I2C
+	};
+
+	// Bus-out enable and SD card power switch are AW9523B pins with no owning peripheral
+	// driver. Touch reset, AW88298 reset and LCD reset are handled directly by their own
+	// device's pin-reset property instead (see touch0/aw88298/display@0 above/below).
+	aw9523_bus_out_enable {
+		compatible = "gpio-hog";
+		pin = <&aw9523b 1 GPIO_FLAG_NONE>;
+		mode = <GPIO_HOG_MODE_OUTPUT_HIGH>;
+	};
+
+	aw9523_sdcard_switch {
+		compatible = "gpio-hog";
+		pin = <&aw9523b 4 GPIO_FLAG_NONE>;
+		mode = <GPIO_HOG_MODE_OUTPUT_HIGH>;
+	};
+
+	aw9523_boost_enable {
+		compatible = "gpio-hog";
+		pin = <&aw9523b 15 GPIO_FLAG_NONE>;
+		mode = <GPIO_HOG_MODE_OUTPUT_HIGH>;
 	};
 
 	// TODO: Servo UART (SCS9009, 1 Mbaud) — TX=GPIO6, RX=GPIO7
