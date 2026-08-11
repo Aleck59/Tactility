@@ -1,18 +1,20 @@
 #include <Tactility/service/gui/GuiService.h>
 
-#include <cstring>
+#include "lvgl/devices/keyboard.h"
 
 #include <Tactility/LogMessages.h>
 #include <Tactility/Tactility.h>
 #include <Tactility/app/AppInstance.h>
-#include <Tactility/lvgl/LvglSync.h>
 #include <Tactility/lvgl/Statusbar.h>
 #include <Tactility/lvgl/UsbHidInput.h>
 #include <Tactility/service/ServiceRegistration.h>
 #include <Tactility/service/loader/Loader.h>
 
 #include <tactility/log.h>
-#include <tactility/lvgl_module.h>
+
+#include <lvgl/lvgl.h>
+
+#include <cstring>
 
 namespace tt::service::gui {
 
@@ -114,7 +116,6 @@ int32_t GuiService::guiMain() {
         return 0;
     }
 
-    service->keyboardGroup = lv_group_create();
     lv_obj_set_style_border_width(screen_root, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(screen_root, 0, LV_STATE_DEFAULT);
 
@@ -158,11 +159,12 @@ lv_obj_t* GuiService::createAppViews(lv_obj_t* parent) {
     lv_obj_set_style_border_width(child_container, 0, LV_STATE_DEFAULT);
     lv_obj_set_flex_grow(child_container, 1);
 
-    if (softwareKeyboardIsEnabled()) {
-        keyboard = lv_keyboard_create(parent);
-        lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+    if (lvgl_software_keyboard_is_enabled()) {
+        lvgl_software_keyboard_construct(&software_keyboard, parent);
     } else {
-        keyboard = nullptr;
+        software_keyboard = {
+            nullptr
+        };
     }
 
     return child_container;
@@ -178,8 +180,19 @@ void GuiService::redraw() {
         return;
     }
 
-    while (!lvgl_try_lock(1000)) {
+    bool lvgl_locked = false;
+    while (lvgl_is_running() && !(lvgl_locked = lvgl_try_lock(1000))) {
         LOG_W(TAG, LOG_MESSAGE_MUTEX_LOCK_FAILED_FMT, "GuiService LVGL");
+    }
+
+    if (!lvgl_locked) {
+        unlock();
+        return;
+    }
+    if (!lvgl_is_running()) {
+        lvgl_unlock();
+        unlock();
+        return;
     }
 
     lv_obj_clean(appRootWidget);
@@ -189,6 +202,13 @@ void GuiService::redraw() {
         // Create a default group which adds all objects automatically,
         // and assign all indevs to it.
         // This enables navigation with limited input, such as encoder wheels.
+        // The previous default group (if any) is no longer referenced by anything
+        // after lv_obj_clean() above, so it must be freed here or it leaks.
+        auto* previous_group = lv_group_get_default();
+        if (previous_group != nullptr) {
+            lv_group_delete(previous_group);
+        }
+
         lv_group_t* group = lv_group_create();
         auto* indev = lv_indev_get_next(nullptr);
         while (indev) {
@@ -264,9 +284,19 @@ void GuiService::onStop(ServiceContext& service) {
     thread->join();
 
     lvgl_lock();
-    if (keyboardGroup != nullptr) {
-        lv_group_delete(keyboardGroup);
-        keyboardGroup = nullptr;
+    if (software_keyboard.object != nullptr) {
+        lvgl_software_keyboard_destruct(&software_keyboard);
+    }
+
+    auto* default_group = lv_group_get_default();
+    if (default_group != nullptr) {
+        lv_group_delete(default_group);
+        lv_group_set_default(nullptr);
+    }
+
+    auto* screen_root = lv_screen_active();
+    if (screen_root != nullptr) {
+        lv_obj_clean(screen_root);
     }
     lvgl_unlock();
 

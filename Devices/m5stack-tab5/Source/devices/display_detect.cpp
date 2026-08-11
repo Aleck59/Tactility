@@ -1,13 +1,14 @@
 #include "detect.h"
 
-#include "../../../../TactilityKernel/include/tactility/log.h"
 #include "devices_common.h"
 #include "devices_v1.h"
 #include "devices_v2.h"
+#include "devices_v3.h"
 #include "tab5_keyboard.h"
 
 #include <tactility/device.h>
 #include <tactility/device_listener.h>
+#include <tactility/drivers/gpio.h>
 #include <tactility/drivers/gpio_controller.h>
 #include <tactility/log.h>
 
@@ -36,8 +37,8 @@ constexpr auto GPIO_EXP0_PIN_LCD_RESET = 4;
 constexpr auto GPIO_EXP0_PIN_TOUCH_RESET = 5;
 
 bool pulse_display_reset_pins(Device* io_expander0) {
-    auto* lcd_reset_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_LCD_RESET, GPIO_OWNER_GPIO);
-    auto* touch_reset_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_TOUCH_RESET, GPIO_OWNER_GPIO);
+    auto* lcd_reset_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_LCD_RESET, GPIO_FLAG_DIRECTION_OUTPUT | GPIO_FLAG_ACTIVE_LOW, GPIO_OWNER_GPIO);
+    auto* touch_reset_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_TOUCH_RESET, GPIO_FLAG_DIRECTION_OUTPUT | GPIO_FLAG_ACTIVE_LOW, GPIO_OWNER_GPIO);
     if (lcd_reset_pin == nullptr || touch_reset_pin == nullptr) {
         LOG_E(TAG, "display_detect: failed to acquire LCD/touch reset pins on io_expander0");
         if (lcd_reset_pin != nullptr) {
@@ -51,11 +52,11 @@ bool pulse_display_reset_pins(Device* io_expander0) {
 
     gpio_descriptor_set_flags(lcd_reset_pin, GPIO_FLAG_DIRECTION_OUTPUT);
     gpio_descriptor_set_flags(touch_reset_pin, GPIO_FLAG_DIRECTION_OUTPUT);
-    gpio_descriptor_set_level(lcd_reset_pin, false);
-    gpio_descriptor_set_level(touch_reset_pin, false);
-    vTaskDelay(pdMS_TO_TICKS(10));
     gpio_descriptor_set_level(lcd_reset_pin, true);
     gpio_descriptor_set_level(touch_reset_pin, true);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_descriptor_set_level(lcd_reset_pin, false);
+    gpio_descriptor_set_level(touch_reset_pin, false);
 
     gpio_descriptor_release(lcd_reset_pin);
     gpio_descriptor_release(touch_reset_pin);
@@ -91,16 +92,18 @@ static void on_display_detect_event(Device* device, DeviceEvent event, void* con
         }
     }
 
-    if (io_expander0 != nullptr && tab5_get_variant() == Tab5Variant::Unknown) {
-        Tab5Variant variant = tab5_probe_variant(i2c0);
-        tab5_set_variant(variant);
-    }
-
-    // We need i2c0 and io_expander0 to create the display and touch devices
+    // We need i2c0 and io_expander0 to pulse the LCD/touch reset pins, probe the variant, and
+    // create the display and touch devices - all gated on the same pair, so do them together in
+    // one pass. Order matters: the reset pulse must run *before* tab5_probe_variant(), otherwise
+    // the touch IC's response depends on whatever power-on state it happened to be in rather than
+    // a deterministic post-reset state.
     if (!did_create_display && i2c0 != nullptr && io_expander0 != nullptr) {
         did_create_display = true;
         if (pulse_display_reset_pins(io_expander0)) {
-            switch (tab5_get_variant()) {
+            Tab5Variant variant = tab5_probe_variant(i2c0);
+            tab5_set_variant(variant);
+
+            switch (variant) {
                 case Tab5Variant::Unknown:
                     LOG_E(TAG, "Variant not detected yet");
                     break;
@@ -109,6 +112,9 @@ static void on_display_detect_event(Device* device, DeviceEvent event, void* con
                     break;
                 case Tab5Variant::V2:
                     tab5_create_devices_v2(i2c0);
+                    break;
+                case Tab5Variant::V3:
+                    tab5_create_devices_v3(i2c0);
                     break;
             }
         } else {

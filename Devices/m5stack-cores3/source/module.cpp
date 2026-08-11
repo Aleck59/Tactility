@@ -1,8 +1,6 @@
 #include <tactility/error.h>
 #include <tactility/module.h>
 
-#include <cstring>
-
 extern "C" {
 
 struct Module m5stack_cores3_module = {

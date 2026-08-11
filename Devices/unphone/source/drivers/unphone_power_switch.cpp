@@ -3,8 +3,7 @@
 
 #include <tactility/driver.h>
 #include <tactility/drivers/gpio_controller.h>
-#include <tactility/drivers/gpio_descriptor.h>
-#include <tactility/error_esp32.h>
+#include <tactility/error.h>
 #include <tactility/log.h>
 
 #include <driver/rtc_io.h>
@@ -25,15 +24,9 @@ extern Module unphone_module;
 static error_t start(Device* device) {
     const auto* config = GET_CONFIG(device);
 
-    auto* descriptor = gpio_descriptor_acquire(config->pin.gpio_controller, config->pin.pin, GPIO_OWNER_GPIO);
+    auto* descriptor = gpio_descriptor_acquire(config->pin.gpio_controller, config->pin.pin, config->pin.flags | GPIO_FLAG_DIRECTION_INPUT, GPIO_OWNER_GPIO);
     if (descriptor == nullptr) {
         LOG_E(TAG, "Failed to acquire GPIO descriptor");
-        return ERROR_RESOURCE;
-    }
-
-    if (gpio_descriptor_set_flags(descriptor, config->pin.flags | GPIO_FLAG_DIRECTION_INPUT) != ERROR_NONE) {
-        LOG_E(TAG, "Failed to configure power switch pin as input");
-        gpio_descriptor_release(descriptor);
         return ERROR_RESOURCE;
     }
 
@@ -73,7 +66,7 @@ error_t unphone_power_switch_is_on(Device* device, bool* on) {
 error_t unphone_power_switch_enable_wake(Device* device) {
     auto* internal = static_cast<UnphonePowerSwitchInternal*>(device_get_driver_data(device));
     auto esp_error = esp_sleep_enable_ext0_wakeup(internal->native_pin, 1);
-    return esp_err_to_error(esp_error);
+    return esp_error == ESP_OK ? ERROR_NONE : ERROR_RESOURCE;
 }
 
 Driver unphone_power_switch_driver = {

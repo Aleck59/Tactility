@@ -2,9 +2,6 @@
 
 #include <driver/gpio.h>
 
-// Board peripheral power-enable pin (display, backlight, etc). Must be asserted before the
-// devicetree devices below start - kernel_init() starts all dts_modules[] (this one included)
-// before constructing any dts_devices[], so doing it here in start() runs early enough.
 constexpr auto POWER_ON_PIN = GPIO_NUM_15;
 
 extern "C" {
@@ -30,16 +27,17 @@ static error_t start() {
 }
 
 static error_t stop() {
-    // Empty for now
+    if (gpio_set_level(POWER_ON_PIN, 0) != ESP_OK) {
+        return ERROR_RESOURCE;
+    }
+
     return ERROR_NONE;
 }
 
-struct Module lilygo_tdisplay_s3_module = {
+Module lilygo_tdisplay_s3_module = {
     .name = "lilygo-tdisplay-s3",
     .start = start,
-    .stop = stop,
-    .symbols = nullptr,
-    .internal = nullptr
+    .stop = stop
 };
 
 }

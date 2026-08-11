@@ -9,7 +9,6 @@
 #include <tactility/drivers/i2c_controller.h>
 #include <tactility/drivers/keyboard.h>
 #include <tactility/log.h>
-#include <tactility/lvgl_module.h>
 #include <tactility/module.h>
 
 #include <driver/gpio.h>
@@ -36,10 +35,11 @@ static constexpr uint32_t REPEAT_RATE_MS = 80;
 // REG_INT_STAT polling (when no IRQ pin) and software key-repeat ticking.
 static constexpr uint32_t POLL_INTERVAL_MS = 20;
 
-// Hot-plug attach-state check interval. I2C probes can false-positive on a floating/half-connected
-// bus (e.g. mid-unplug), so a state change is only acted on once it's seen on two consecutive
-// checks in a row (see check_attach_state()).
-static constexpr uint32_t ATTACH_CHECK_INTERVAL_MS = 1000;
+// Upper bound on events consumed per drain_events() call. Since the loop re-reads REG_EVENT_NUM
+// each iteration rather than counting down a latched value, this caps the damage if the device
+// ever reports a non-zero count that never drains - without it, that would spin forever holding
+// the I2C bus. The device's own queue is far smaller than this, so it never limits normal bursts.
+static constexpr uint8_t MAX_EVENTS_PER_DRAIN = 32;
 
 // ---------------------------------------------------------------------------
 // Register addresses
@@ -123,6 +123,12 @@ static constexpr HidMapping KEY_MATRIX_HID_SYM[70] = {
 // Covers all codes present in the Tab5 matrix tables above. LV_KEY_* are plain uint32_t
 // constants - matching KeyboardKeyData::key's driver-defined contract and the same convention
 // m5stack-module's cardputer_keyboard.cpp kernel driver already uses.
+//
+// `ctrl` only selects the LVGL focus-navigation aliases for the arrow keys. Ctrl chords on
+// ordinary keys are NOT folded into the returned value - the C0 control codes a terminal wants
+// (Ctrl+C = 0x03, Ctrl+K = 0x0B, ...) collide with the LVGL constants returned here (LV_KEY_END = 3,
+// LV_KEY_PREV = 11, ...), so Ctrl is reported out-of-band via KeyboardKeyData::ctrl instead and
+// consumers that want control codes derive them themselves.
 // ---------------------------------------------------------------------------
 static uint32_t tab5_translate_key(uint8_t keycode, uint8_t modifier, bool ctrl) {
     const bool shift = (modifier & 0x22U) != 0U;
@@ -178,6 +184,15 @@ static uint32_t now_ms() {
     return static_cast<uint32_t>(esp_timer_get_time() / 1000);
 }
 
+// Queued key event. Modifier state is captured here at enqueue time rather than read back from
+// Tab5KeyboardInternal at dequeue time, since the user can release Ctrl before read_key() drains
+// the event - and software key-repeat replays this same struct, so a held chord keeps its modifiers.
+struct Tab5KeyEvent {
+    uint32_t key;
+    bool ctrl;
+    bool alt;
+};
+
 struct Tab5KeyboardInternal {
     QueueHandle_t queue;
 
@@ -187,30 +202,24 @@ struct Tab5KeyboardInternal {
     bool aa_held;
     bool aa_tapped;
     bool ctrl_held;
+    bool alt_held;
 
     // IRQ-driven event gating
     volatile bool irq_pending;
     bool irq_configured;
     gpio_num_t irq_pin;
 
-    // Poll/attach-check throttling (real-time based, since read_key() is called at whatever rate
-    // LVGL's indev timer and its own drain-loop - via continue_reading - happen to run at, unlike
-    // the old deprecated-HAL's fixed 20ms Timer)
+    // Poll throttling (real-time based, since read_key() is called at whatever rate LVGL's indev
+    // timer and its own drain-loop - via continue_reading - happen to run at, unlike the old
+    // deprecated-HAL's fixed 20ms Timer)
     uint32_t last_poll_ms;
-    uint32_t last_attach_check_ms;
-    bool was_attached;
-    bool pending_attach_state;
-    uint8_t pending_attach_confirm_count;
 
     // Software key-repeat state (tracked by position to survive modifier changes)
-    uint32_t repeat_key;
+    Tab5KeyEvent repeat_event;
     uint8_t repeat_row;
     uint8_t repeat_col;
     uint32_t repeat_start_ms;
     uint32_t repeat_last_ms;
-
-    Tab5KeyboardAttachListener attach_listener;
-    void* attach_listener_context;
 };
 
 // ---------------------------------------------------------------------------
@@ -226,9 +235,20 @@ static bool write_reg(Device* device, uint8_t reg, uint8_t value) {
     return i2c_controller_write_register(parent, I2C_ADDRESS, reg, &value, 1, pdMS_TO_TICKS(50)) == ERROR_NONE;
 }
 
-static bool is_attached_raw(Device* device) {
+// Short-timeout variant used only by tab5_keyboard_reinit(), which runs on the FreeRTOS timer
+// daemon task (via tab5_keyboard_attach_detect.cpp) - a slow/absent device there blocks every
+// other software timer in the system, not just this one, so it can't afford write_reg()'s 50ms
+// per-call budget. read_reg()/write_reg() themselves stay at 50ms since they're also used from the
+// hot IRQ/poll path (drain_events()), where a too-short timeout would cause missed key events
+// under normal bus contention.
+static bool write_reg_fast(Device* device, uint8_t reg, uint8_t value) {
     auto* parent = device_get_parent(device);
-    return i2c_controller_has_device_at_address(parent, I2C_ADDRESS, pdMS_TO_TICKS(100)) == ERROR_NONE;
+    return i2c_controller_write_register(parent, I2C_ADDRESS, reg, &value, 1, pdMS_TO_TICKS(2)) == ERROR_NONE;
+}
+
+bool tab5_keyboard_is_attached(Device* device) {
+    auto* parent = device_get_parent(device);
+    return i2c_controller_has_device_at_address(parent, I2C_ADDRESS, pdMS_TO_TICKS(5)) == ERROR_NONE;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,16 +311,22 @@ static void remove_irq_pin(Tab5KeyboardInternal* internal) {
 // drain_events - reads all pending events from the device queue
 // ---------------------------------------------------------------------------
 static void drain_events(Device* device, Tab5KeyboardInternal* internal) {
-    uint8_t count = 0;
-    if (!read_reg(device, REG_EVENT_NUM, &count) || count == 0) {
-        return;
-    }
+    // REG_EVENT_NUM is re-read every iteration rather than latched once and counted down, matching
+    // M5's own UnitTab5Keyboard::drain_events(). Each REG_KEY_EVENT read consumes one event from the
+    // device queue, so a count latched up front can go stale mid-drain; re-reading makes the loop
+    // self-correcting and lets it stop as soon as the device says the queue is actually empty.
+    uint8_t drained = 0;
+    while (drained < MAX_EVENTS_PER_DRAIN) {
+        uint8_t count = 0;
+        if (!read_reg(device, REG_EVENT_NUM, &count) || count == 0) {
+            break;
+        }
 
-    while (count > 0) {
         uint8_t raw = 0;
         if (!read_reg(device, REG_KEY_EVENT, &raw) || raw == KEY_EVENT_EMPTY) {
             break;
         }
+        drained++;
 
         const bool pressed = (raw & 0x80U) != 0U;
         const uint8_t row = (raw >> 4U) & 0x07U;
@@ -310,7 +336,6 @@ static void drain_events(Device* device, Tab5KeyboardInternal* internal) {
         if (row == MOD_ROW_SYM && col == MOD_COL_SYM) {
             internal->sym_active = pressed;
             update_leds(device, internal);
-            count--;
             continue;
         }
         if (row == MOD_ROW_AA && col == MOD_COL_AA) {
@@ -326,16 +351,14 @@ static void drain_events(Device* device, Tab5KeyboardInternal* internal) {
                 internal->aa_tapped = false;
             }
             update_leds(device, internal);
-            count--;
             continue;
         }
         if (row == MOD_ROW_CTRL && col == MOD_COL_CTRL) {
             internal->ctrl_held = pressed;
-            count--;
             continue;
         }
         if (row == MOD_ROW_ALT && col == MOD_COL_ALT) {
-            count--;
+            internal->alt_held = pressed;
             continue;
         }
 
@@ -356,10 +379,11 @@ static void drain_events(Device* device, Tab5KeyboardInternal* internal) {
                         // no business reaching into, so ESC is now just queued as a normal key
                         // like everything else (LVGL/app code already handles ESC via focus/group
                         // navigation the same way a dedicated ESC key on any other keyboard would).
-                        xQueueSend(internal->queue, &lv_key, 0);
+                        const Tab5KeyEvent event = { lv_key, internal->ctrl_held, internal->alt_held };
+                        xQueueSend(internal->queue, &event, 0);
                         // Arm software repeat tracking by row/col to survive modifier changes
                         const uint32_t now = now_ms();
-                        internal->repeat_key = lv_key;
+                        internal->repeat_event = event;
                         internal->repeat_row = row;
                         internal->repeat_col = col;
                         internal->repeat_start_ms = now;
@@ -372,12 +396,11 @@ static void drain_events(Device* device, Tab5KeyboardInternal* internal) {
                         }
                     } else if (row == internal->repeat_row && col == internal->repeat_col) {
                         // Match release by position, not translated value — survives sticky Aa clear
-                        internal->repeat_key = 0;
+                        internal->repeat_event.key = 0;
                     }
                 }
             }
         }
-        count--;
     }
 
     // Clear INT status after draining so the line de-asserts
@@ -385,69 +408,32 @@ static void drain_events(Device* device, Tab5KeyboardInternal* internal) {
 }
 
 // ---------------------------------------------------------------------------
-// reinit_device - (re)applies the device register configuration. Used at start() and again on
-// hot-plug reattach, since the device's RGB mode and interrupt configuration are volatile and
-// reset to power-on defaults when the keyboard is unplugged and reconnected.
+// tab5_keyboard_reinit - (re)applies the device register configuration. Called from start() and
+// again by tab5_keyboard_attach_detect.cpp on confirmed hot-plug reattach, since the device's RGB
+// mode and interrupt configuration are volatile and reset to power-on defaults when the keyboard
+// is unplugged and reconnected.
 // ---------------------------------------------------------------------------
-static void reinit_device(Device* device, Tab5KeyboardInternal* internal) {
-    write_reg(device, REG_KEYBOARD_MODE, 0x00); // Normal mode
-    write_reg(device, REG_EVENT_NUM, 0x00);     // flush event queue
-    write_reg(device, REG_INT_STAT, 0x00);      // clear pending INT
-    write_reg(device, REG_RGB_MODE, 0x01);      // Custom RGB mode (manual LED control)
-    write_reg(device, REG_BRIGHTNESS, 50);      // 50% brightness
-    update_leds(device, internal);              // restore current LED state
+void tab5_keyboard_reinit(Device* device) {
+    auto* internal = static_cast<Tab5KeyboardInternal*>(device_get_driver_data(device));
+    write_reg_fast(device, REG_KEYBOARD_MODE, 0x00); // Normal mode
+    write_reg_fast(device, REG_EVENT_NUM, 0x00);     // flush event queue
+    write_reg_fast(device, REG_INT_STAT, 0x00);      // clear pending INT
+    write_reg_fast(device, REG_RGB_MODE, 0x01);      // Custom RGB mode (manual LED control)
+    write_reg_fast(device, REG_BRIGHTNESS, 50);      // 50% brightness
+    update_leds(device, internal);                   // restore current LED state
 
     if (internal->irq_configured) {
-        write_reg(device, REG_INT_CFG, 0x01);   // re-enable Normal-mode interrupt (bit 0)
+        write_reg_fast(device, REG_INT_CFG, 0x01);   // re-enable Normal-mode interrupt (bit 0)
     }
-}
-
-// ---------------------------------------------------------------------------
-// check_attach_state - throttled (~1s) hot-plug detection. Reapplies device register
-// configuration on reattach, and notifies the registered attach listener (if any) of confirmed
-// transitions - see Tab5KeyboardAttachListener's doc comment for the retry contract.
-// ---------------------------------------------------------------------------
-static void check_attach_state(Device* device, Tab5KeyboardInternal* internal) {
-    uint32_t now = now_ms();
-    if (now - internal->last_attach_check_ms < ATTACH_CHECK_INTERVAL_MS) {
-        return;
-    }
-    internal->last_attach_check_ms = now;
-
-    const bool attached = is_attached_raw(device);
-    if (attached == internal->was_attached) {
-        internal->pending_attach_confirm_count = 0;
-        return;
-    }
-
-    // Require the new state to be confirmed on a second consecutive check before acting - a
-    // single probe on a floating/half-connected bus (e.g. mid-unplug) can false-positive.
-    if (attached != internal->pending_attach_state || internal->pending_attach_confirm_count == 0) {
-        internal->pending_attach_state = attached;
-        internal->pending_attach_confirm_count = 1;
-        return;
-    }
-    internal->pending_attach_confirm_count = 0;
-
-    if (attached) {
-        reinit_device(device, internal);
-    }
-
-    if (internal->attach_listener != nullptr) {
-        if (!internal->attach_listener(device, attached, internal->attach_listener_context)) {
-            return; // not handled yet (e.g. LVGL lock busy) - retry on the next confirmed check
-        }
-    }
-
-    internal->was_attached = attached;
 }
 
 // ---------------------------------------------------------------------------
 // poll_if_due - the closest equivalent to the old deprecated-HAL's 20ms-Timer-driven
-// processKeyboard(): drains new key events (IRQ-gated or polled), ticks software key-repeat, and
-// checks hot-plug attach state. Called from read_key(), throttled to real elapsed time rather
-// than call count, since read_key() can be called back-to-back multiple times per LVGL indev
-// timer tick while draining an already-queued burst (continue_reading).
+// processKeyboard(): drains new key events (IRQ-gated or polled) and ticks software key-repeat.
+// Called from read_key(), throttled to real elapsed time rather than call count, since read_key()
+// can be called back-to-back multiple times per LVGL indev timer tick while draining an
+// already-queued burst (continue_reading). Hot-plug attach detection lives outside the driver -
+// see tab5_keyboard_attach_detect.cpp.
 // ---------------------------------------------------------------------------
 static void poll_if_due(Device* device, Tab5KeyboardInternal* internal) {
     uint32_t now = now_ms();
@@ -473,18 +459,22 @@ static void poll_if_due(Device* device, Tab5KeyboardInternal* internal) {
         drain_events(device, internal);
     }
 
-    // Software key-repeat (runs every tick regardless of IRQ)
-    if (internal->repeat_key != 0U) {
-        if ((now - internal->repeat_start_ms) >= REPEAT_INITIAL_MS) {
+    // Software key-repeat (runs every tick regardless of IRQ).
+    //
+    // The clock is re-read here rather than reusing `now` from the top of the function: a press
+    // handled by the drain above sets repeat_start_ms to a timestamp taken *during* the drain, which
+    // is later than `now`. The unsigned subtraction below would then wrap to a huge value and clear
+    // the REPEAT_INITIAL_MS gate immediately, emitting one spurious repeat ~1ms after every press.
+    const uint32_t repeat_now = now_ms();
+    if (internal->repeat_event.key != 0U) {
+        if ((repeat_now - internal->repeat_start_ms) >= REPEAT_INITIAL_MS) {
             const uint32_t last = internal->repeat_last_ms;
-            if (last == 0 || (now - last) >= REPEAT_RATE_MS) {
-                internal->repeat_last_ms = now;
-                xQueueSend(internal->queue, &internal->repeat_key, 0);
+            if (last == 0 || (repeat_now - last) >= REPEAT_RATE_MS) {
+                internal->repeat_last_ms = repeat_now;
+                xQueueSend(internal->queue, &internal->repeat_event, 0);
             }
         }
     }
-
-    check_attach_state(device, internal);
 }
 
 static gpio_num_t pin_or_nc(const GpioPinSpec& pin) {
@@ -505,7 +495,7 @@ static error_t start(Device* device) {
     }
     memset(internal, 0, sizeof(Tab5KeyboardInternal));
 
-    internal->queue = xQueueCreate(20, sizeof(uint32_t));
+    internal->queue = xQueueCreate(20, sizeof(Tab5KeyEvent));
     if (internal->queue == nullptr) {
         free(internal);
         return ERROR_OUT_OF_MEMORY;
@@ -517,17 +507,24 @@ static error_t start(Device* device) {
     internal->irq_pin = pin_or_nc(config->pin_interrupt);
     if (internal->irq_pin != GPIO_NUM_NC) {
         configure_irq_pin(internal); // best-effort; falls back to polling if it fails. Must
-                                     // happen before reinit_device() so REG_INT_CFG is written
-                                     // if IRQ setup succeeded.
+                                     // happen before tab5_keyboard_reinit() so REG_INT_CFG is
+                                     // written if IRQ setup succeeded.
     }
 
-    // Best-effort: if the keyboard isn't attached yet (e.g. this device is constructed
-    // speculatively at boot so it can be hot-plug-detected later), these I2C writes fail
-    // silently and reinit_device() runs again once attach is detected.
-    reinit_device(device, internal);
-    internal->was_attached = is_attached_raw(device);
-
+    // Driver data must be set before tab5_keyboard_reinit() - it looks internal back up via
+    // device_get_driver_data().
     device_set_driver_data(device, internal);
+
+    // This device is constructed speculatively at boot so it can be hot-plug-detected later - if
+    // the keyboard isn't physically attached yet, skip reinit here (tab5_keyboard_attach_detect.cpp
+    // calls it again once attach is confirmed) rather than issuing register writes that are certain
+    // to fail: unlike tab5_keyboard_is_attached()'s plain probe, write_register() logs at error
+    // level on failure (see esp32_i2c_master.cpp), which would be misleading noise for what's just
+    // "not plugged in yet".
+    if (tab5_keyboard_is_attached(device)) {
+        tab5_keyboard_reinit(device);
+    }
+
     return ERROR_NONE;
 }
 
@@ -556,15 +553,19 @@ static error_t tab5_keyboard_read_key(Device* device, KeyboardKeyData* data) {
 
     poll_if_due(device, internal);
 
-    uint32_t lv_key = 0;
-    if (xQueueReceive(internal->queue, &lv_key, 0) == pdTRUE) {
-        data->key = lv_key;
+    Tab5KeyEvent event = {};
+    if (xQueueReceive(internal->queue, &event, 0) == pdTRUE) {
+        data->key = event.key;
         data->pressed = true;
         data->continue_reading = uxQueueMessagesWaiting(internal->queue) > 0;
+        data->ctrl = event.ctrl;
+        data->alt = event.alt;
     } else {
         data->key = 0;
         data->pressed = false;
         data->continue_reading = false;
+        data->ctrl = false;
+        data->alt = false;
     }
 
     return ERROR_NONE;
@@ -591,67 +592,7 @@ Driver tab5_keyboard_driver = {
     .internal = nullptr
 };
 
-// region Attach listener
-
-void tab5_keyboard_add_attach_listener(Device* device, Tab5KeyboardAttachListener callback, void* context) {
-    auto* internal = static_cast<Tab5KeyboardInternal*>(device_get_driver_data(device));
-    if (internal->attach_listener != nullptr) {
-        LOG_W(TAG, "Replacing existing attach listener without it being removed first");
-    }
-    internal->attach_listener = callback;
-    internal->attach_listener_context = context;
-}
-
-void tab5_keyboard_remove_attach_listener(Device* device, Tab5KeyboardAttachListener callback) {
-    auto* internal = static_cast<Tab5KeyboardInternal*>(device_get_driver_data(device));
-    if (internal->attach_listener != callback) {
-        return;
-    }
-    internal->attach_listener = nullptr;
-    internal->attach_listener_context = nullptr;
-}
-
-// endregion
-
 // region Dynamic construction
-
-// Reacts to the Tab5 keyboard accessory's hot-plug attach state (see Tab5KeyboardAttachListener's
-// doc comment above for the retry contract). This is UI-layer behavior the driver itself can't do
-// (it has no LVGL dependency): switch to landscape while the keyboard is attached, restoring
-// whatever rotation was active before once it's removed - but only if the user hasn't manually
-// changed it since attaching, in which case their choice is respected. Ported as-is from the
-// deprecated HAL's Tab5Keyboard::applyAutoRotation().
-static bool on_keyboard_attach_changed(Device* /*device*/, bool attached, void* /*context*/) {
-    static lv_display_rotation_t saved_rotation = LV_DISPLAY_ROTATION_0;
-    static bool rotation_override_active = false;
-
-    auto* display = lv_display_get_default();
-    if (display == nullptr) {
-        return false; // LVGL not ready yet - retry on the next confirmed check
-    }
-
-    if (!lvgl_try_lock(pdMS_TO_TICKS(1000))) {
-        return false; // retry next check
-    }
-
-    if (attached) {
-        if (lv_display_get_rotation(display) != LV_DISPLAY_ROTATION_90) {
-            saved_rotation = lv_display_get_rotation(display);
-            rotation_override_active = true;
-            lv_display_set_rotation(display, LV_DISPLAY_ROTATION_90);
-        }
-    } else {
-        // Only restore if rotation is still what we set it to - if the user manually changed it
-        // since attaching, respect their choice instead.
-        if (rotation_override_active && lv_display_get_rotation(display) == LV_DISPLAY_ROTATION_90) {
-            lv_display_set_rotation(display, saved_rotation);
-        }
-        rotation_override_active = false;
-    }
-
-    lvgl_unlock();
-    return true;
-}
 
 static Tab5KeyboardConfig tab5_keyboard_config {};
 static Device tab5_keyboard_device {};
@@ -659,8 +600,9 @@ static Device tab5_keyboard_device {};
 // The keyboard accessory is a kernel driver device (m5stack,tab5-keyboard, defined directly in
 // this project). Unlike the display/touch, it isn't gated on the display-variant detection at
 // all (it lives on i2c2, a separate bus) - lvgl-module binds its indev unconditionally at boot
-// regardless of physical attach state, and the driver's own read_key() polling handles hot-plug
-// internally.
+// regardless of physical attach state. Hot-plug attach/detach handling (register reinit, LVGL
+// rotation) lives in tab5_keyboard_attach_detect.cpp, not this driver - see module.cpp for where
+// that gets started.
 void tab5_create_keyboard(Device* i2c2) {
     tab5_keyboard_device = Device {
         .address = 0,
@@ -687,9 +629,7 @@ void tab5_create_keyboard(Device* i2c2) {
 
     // Parented to i2c2 itself (not root, unlike the display): the keyboard driver's start() uses
     // device_get_parent() as its I2C bus controller.
-    if (construct_add_start(&tab5_keyboard_device, i2c2, "m5stack,tab5-keyboard")) {
-        tab5_keyboard_add_attach_listener(&tab5_keyboard_device, on_keyboard_attach_changed, nullptr);
-    }
+    construct_add_start(&tab5_keyboard_device, i2c2, "m5stack,tab5-keyboard");
 }
 
 // endregion

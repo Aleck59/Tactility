@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-#include <tactility/crypt.h>
-#include <tactility/hash.h>
-#include <tactility/error.h>
-#include <tactility/module.h>
+#include <crypt/crypt.h>
+#include <crypt/hash.h>
+#include <crypt/module.h>
 
 extern "C" {
 
@@ -18,10 +17,7 @@ static const ModuleSymbol crypt_module_symbols[] = {
 
 Module crypt_module = {
     .name = "crypt",
-    .start = [] -> error_t { return ERROR_NONE; },
-    .stop = [] -> error_t { return ERROR_NONE; },
-    .symbols = crypt_module_symbols,
-    .internal = nullptr
+    .symbols = crypt_module_symbols
 };
 
 }

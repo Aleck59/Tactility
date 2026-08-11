@@ -5,16 +5,6 @@
 #include "tt_app_fileselection.h"
 #include "tt_app_selectiondialog.h"
 #include "tt_bundle.h"
-#include "tt_gps.h"
-#include "tt_hal_device.h"
-#include "tt_hal_display.h"
-#include "tt_hal_touch.h"
-#include "tt_hal_uart.h"
-#include <tt_lock.h>
-#include "tt_lvgl.h"
-#include "tt_lvgl_keyboard.h"
-#include "tt_lvgl_spinner.h"
-#include "tt_lvgl_toolbar.h"
 #include "tt_preferences.h"
 #include "tt_time.h"
 
@@ -43,6 +33,7 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <esp_system.h>
+#include <esp_vfs.h>
 #include <fcntl.h>
 #include <lwip/sockets.h>
 #include <lwip/netdb.h>
@@ -82,6 +73,7 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(rand),
     ESP_ELFSYM_EXPORT(srand),
     ESP_ELFSYM_EXPORT(rand_r),
+    ESP_ELFSYM_EXPORT(atof),
     ESP_ELFSYM_EXPORT(atoi),
     ESP_ELFSYM_EXPORT(atol),
     ESP_ELFSYM_EXPORT(system),
@@ -98,6 +90,7 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(close),
     ESP_ELFSYM_EXPORT(rmdir),
     ESP_ELFSYM_EXPORT(unlink),
+    ESP_ELFSYM_EXPORT(open),
     // strings.h
     ESP_ELFSYM_EXPORT(explicit_bzero),
     ESP_ELFSYM_EXPORT(strcasecmp),
@@ -203,6 +196,10 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(fgets),
     ESP_ELFSYM_EXPORT(fopen),
     ESP_ELFSYM_EXPORT(freopen),
+    // Lets an app find the descriptor behind a stream. Needed when stdin/stdout have been pointed
+    // somewhere other than descriptors 0 and 1, which is the case for an app that owns a terminal.
+    ESP_ELFSYM_EXPORT(fileno),
+    ESP_ELFSYM_EXPORT(setvbuf),
     ESP_ELFSYM_EXPORT(fputc),
     ESP_ELFSYM_EXPORT(fputs),
     ESP_ELFSYM_EXPORT(fprintf),
@@ -248,6 +245,7 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(memchr),
     ESP_ELFSYM_EXPORT(memmove),
     ESP_ELFSYM_EXPORT(strdup),
+    ESP_ELFSYM_EXPORT(stpcpy),
 
     // ctype
     ESP_ELFSYM_EXPORT(isalnum),
@@ -265,6 +263,13 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(toupper),
     // ESP-IDF
     ESP_ELFSYM_EXPORT(esp_log),
+    // Lets an app that has taken over the display quieten firmware logging: with stdout redirected
+    // to a terminal the app owns, anything logged appears on screen as if the app had printed it.
+    ESP_ELFSYM_EXPORT(esp_log_level_set),
+    // Lets an app redirect firmware logging somewhere other than stdout. An app that has pointed
+    // stdout at its own terminal needs this: without it, every ESP_LOG from any component in the
+    // system - NTP, RTC, TLS - paints over the app's display.
+    ESP_ELFSYM_EXPORT(esp_log_set_vprintf),
     ESP_ELFSYM_EXPORT(esp_log_write),
     ESP_ELFSYM_EXPORT(esp_log_timestamp),
     ESP_ELFSYM_EXPORT(esp_err_to_name),
@@ -287,10 +292,6 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(tt_app_get_user_data_child_path),
     ESP_ELFSYM_EXPORT(tt_app_get_assets_path),
     ESP_ELFSYM_EXPORT(tt_app_get_assets_child_path),
-    ESP_ELFSYM_EXPORT(tt_lock_alloc_for_path),
-    ESP_ELFSYM_EXPORT(tt_lock_acquire),
-    ESP_ELFSYM_EXPORT(tt_lock_release),
-    ESP_ELFSYM_EXPORT(tt_lock_free),
     ESP_ELFSYM_EXPORT(tt_bundle_alloc),
     ESP_ELFSYM_EXPORT(tt_bundle_free),
     ESP_ELFSYM_EXPORT(tt_bundle_opt_bool),
@@ -299,58 +300,6 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(tt_bundle_put_bool),
     ESP_ELFSYM_EXPORT(tt_bundle_put_int32),
     ESP_ELFSYM_EXPORT(tt_bundle_put_string),
-    ESP_ELFSYM_EXPORT(tt_gps_has_coordinates),
-    ESP_ELFSYM_EXPORT(tt_gps_get_coordinates),
-    ESP_ELFSYM_EXPORT(tt_hal_device_find),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_alloc),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_draw_bitmap),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_free),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_get_colorformat),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_get_pixel_height),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_get_pixel_width),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_lock),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_unlock),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_supported),
-    ESP_ELFSYM_EXPORT(tt_hal_display_driver_get_frame_buffers),
-    ESP_ELFSYM_EXPORT(tt_hal_touch_driver_supported),
-    ESP_ELFSYM_EXPORT(tt_hal_touch_driver_alloc),
-    ESP_ELFSYM_EXPORT(tt_hal_touch_driver_free),
-    ESP_ELFSYM_EXPORT(tt_hal_touch_driver_get_touched_points),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_get_count),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_get_name),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_alloc),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_free),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_start),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_is_started),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_stop),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_read_bytes),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_read_byte),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_write_bytes),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_available),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_set_baud_rate),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_get_baud_rate),
-    ESP_ELFSYM_EXPORT(tt_hal_uart_flush_input),
-    ESP_ELFSYM_EXPORT(tt_lvgl_is_started),
-    ESP_ELFSYM_EXPORT(tt_lvgl_lock),
-    ESP_ELFSYM_EXPORT(tt_lvgl_unlock),
-    ESP_ELFSYM_EXPORT(tt_lvgl_start),
-    ESP_ELFSYM_EXPORT(tt_lvgl_stop),
-    ESP_ELFSYM_EXPORT(tt_lvgl_software_keyboard_show),
-    ESP_ELFSYM_EXPORT(tt_lvgl_software_keyboard_hide),
-    ESP_ELFSYM_EXPORT(tt_lvgl_software_keyboard_is_enabled),
-    ESP_ELFSYM_EXPORT(tt_lvgl_software_keyboard_activate),
-    ESP_ELFSYM_EXPORT(tt_lvgl_software_keyboard_deactivate),
-    ESP_ELFSYM_EXPORT(tt_lvgl_hardware_keyboard_is_available),
-    ESP_ELFSYM_EXPORT(tt_lvgl_hardware_keyboard_set_indev),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_create),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_create_for_app),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_set_title),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_set_nav_action),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_add_image_button_action),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_add_text_button_action),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_add_switch_action),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_add_spinner_action),
-    ESP_ELFSYM_EXPORT(tt_lvgl_toolbar_clear_actions),
     ESP_ELFSYM_EXPORT(tt_preferences_alloc),
     ESP_ELFSYM_EXPORT(tt_preferences_free),
     ESP_ELFSYM_EXPORT(tt_preferences_opt_bool),
@@ -364,8 +313,6 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(tt_timezone_get_code),
     ESP_ELFSYM_EXPORT(tt_timezone_is_format_24_hour),
     ESP_ELFSYM_EXPORT(tt_timezone_set_format_24_hour),
-    // tt::lvgl
-    ESP_ELFSYM_EXPORT(tt_lvgl_spinner_create),
 
     // stdio.h
     ESP_ELFSYM_EXPORT(rename),
@@ -394,9 +341,26 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(ipaddr_addr),
     // POSIX socket names (VFS wrappers used when apps include <sys/socket.h>)
     ESP_ELFSYM_EXPORT(select),
+    // stdlib.h - environment and sorting
+    ESP_ELFSYM_EXPORT(getenv),
+    ESP_ELFSYM_EXPORT(setenv),
+    ESP_ELFSYM_EXPORT(unsetenv),
+    ESP_ELFSYM_EXPORT(qsort),
+    // unistd.h
+    ESP_ELFSYM_EXPORT(access),
+    ESP_ELFSYM_EXPORT(isatty),
+    ESP_ELFSYM_EXPORT(read),
+    ESP_ELFSYM_EXPORT(write),
+    ESP_ELFSYM_EXPORT(lseek),
     // sys/stat.h
     ESP_ELFSYM_EXPORT(stat),
     ESP_ELFSYM_EXPORT(mkdir),
+    // esp_vfs.h - lets an app register a device node (e.g. a terminal at /dev/...) so that plain
+    // printf/stdout reaches it. Note the registration is global and outlives the app unless it
+    // unregisters: an app that takes this must release it on shutdown, or the next one inherits a
+    // path whose callbacks point into unloaded memory.
+    ESP_ELFSYM_EXPORT(esp_vfs_register),
+    ESP_ELFSYM_EXPORT(esp_vfs_unregister),
     // esp_netif.h
     ESP_ELFSYM_EXPORT(esp_netif_get_ip_info),
     ESP_ELFSYM_EXPORT(esp_netif_get_handle_from_ifkey),
@@ -427,6 +391,19 @@ const esp_elfsym main_symbols[] {
     ESP_ELFSYM_EXPORT(tinfl_decompress),
     ESP_ELFSYM_EXPORT(tinfl_decompress_mem_to_callback),
     ESP_ELFSYM_EXPORT(tinfl_decompress_mem_to_mem),
+    // Compression, the counterpart to the tinfl_* decompression above. Like those, these live in
+    // the chip's ROM rather than in flash, so exporting them costs nothing.
+    //
+    // Note this is miniz, not zlib: ESP-IDF builds it with MINIZ_NO_ZLIB_APIS, so deflate/inflate,
+    // crc32 and the gz* file API do not exist anywhere in the firmware. An app wanting gzip files
+    // has to use the tdefl_/tinfl_ interfaces directly, or vendor zlib itself.
+    ESP_ELFSYM_EXPORT(tdefl_init),
+    ESP_ELFSYM_EXPORT(tdefl_compress),
+    ESP_ELFSYM_EXPORT(tdefl_compress_buffer),
+    ESP_ELFSYM_EXPORT(tdefl_compress_mem_to_mem),
+    ESP_ELFSYM_EXPORT(tdefl_compress_mem_to_output),
+    ESP_ELFSYM_EXPORT(tdefl_get_adler32),
+    ESP_ELFSYM_EXPORT(tdefl_get_prev_return_status),
     // ledc
     ESP_ELFSYM_EXPORT(ledc_update_duty),
     ESP_ELFSYM_EXPORT(ledc_set_freq),

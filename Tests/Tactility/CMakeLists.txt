@@ -14,9 +14,12 @@ target_link_libraries(TactilityTests PRIVATE
     Tactility
     TactilityKernel
     platform-posix
-    hal-device-module
     lvgl-module
     crypt-module
+    gps-module
+    gps-generic-module
+    gps-meshtastic-module
+    service-module
     lvgl
     SDL2::SDL2-static SDL2-static
 )

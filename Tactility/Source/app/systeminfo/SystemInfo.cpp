@@ -1,19 +1,20 @@
-#include <Tactility/TactilityConfig.h>
-#include <Tactility/lvgl/LvglSync.h>
-#include <Tactility/lvgl/Toolbar.h>
-#include <Tactility/Tactility.h>
-#include <Tactility/Timer.h>
+#include "tactility/time.h"
+
 
 #include <Tactility/Paths.h>
+#include <Tactility/Tactility.h>
+#include <Tactility/TactilityConfig.h>
+#include <Tactility/Timer.h>
+#include <Tactility/lvgl/Toolbar.h>
+
 #include <algorithm>
 #include <cstring>
 #include <format>
-#include <lvgl.h>
 #include <utility>
 
-#include <tactility/lvgl_fonts.h>
-#include <tactility/lvgl_icon_shared.h>
-#include <tactility/lvgl_module.h>
+#include <lvgl/icons/shared.h>
+#include <lvgl/fonts.h>
+#include <lvgl/lvgl.h>
 
 #ifdef ESP_PLATFORM
 #include <esp_vfs_fat.h>
@@ -244,21 +245,21 @@ static std::shared_ptr<SystemInfoApp> optApp() {
 }
 
 class SystemInfoApp final : public App {
-    Timer memoryTimer = Timer(Timer::Type::Periodic, kernel::millisToTicks(10000), [] {
+    Timer memoryTimer = Timer(Timer::Type::Periodic, millis_to_ticks(10000), [] {
         auto app = optApp();
         if (app) {
-            auto lock = lvgl::getSyncLock()->asScopedLock();
-            lock.lock();
+            lvgl_lock();
             app->updateMemory();
+            lvgl_unlock();
         }
     });
 
-    Timer tasksTimer = Timer(Timer::Type::Periodic, kernel::millisToTicks(15000), [] {
+    Timer tasksTimer = Timer(Timer::Type::Periodic, millis_to_ticks(15000), [] {
         auto app = optApp();
         if (app) {
-            auto lock = lvgl::getSyncLock()->asScopedLock();
-            lock.lock();
+            lvgl_lock();
             app->updateTasks();
+            lvgl_unlock();
         }
     });
 

@@ -4,15 +4,13 @@
 
 #include <Tactility/app/AppContext.h>
 #include <Tactility/app/AppRegistration.h>
-#include <Tactility/hal/display/DisplayDevice.h>
 #include <Tactility/service/loader/Loader.h>
 
+#include <lvgl/icons/shared.h>
 #include <lvgl.h>
+#include <lvgl/fonts.h>
 #include <tactility/device.h>
 #include <tactility/drivers/power_supply.h>
-#include <tactility/hal/Device.h>
-#include <tactility/lvgl_fonts.h>
-#include <tactility/lvgl_icon_shared.h>
 
 namespace tt::app::poweroff {
 

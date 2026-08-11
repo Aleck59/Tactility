@@ -1,4 +1,5 @@
 #include <tactility/module.h>
+
 #include <tactility/check.h>
 #include <tactility/device.h>
 #include <tactility/device_listener.h>
@@ -12,10 +13,11 @@
 #include "devices/detect.h"
 #include "devices/tab5_headphone_detect.h"
 #include "devices/tab5_keyboard.h"
+#include "devices/tab5_keyboard_attach_detect.h"
 #include "devices/tab5_power_control.h"
 #include "devices/tab_5_camera.h"
 
-#define TAG "Tab5"
+constexpr auto* TAG = "Tab5";
 
 // PI4IOE5V6408-0 (0x43) bit 1
 constexpr auto GPIO_EXP0_PIN_SPEAKER_ENABLE = 1;
@@ -25,13 +27,10 @@ constexpr auto GPIO_EXP0_PIN_HEADPHONE_DETECT = 7;
 static void tab5_init_expander0(Device* io_expander0) {
     // Speaker and heapdhone pins are managed at runtime, so we can't have them as a hog in the dts file
     // We have to init them manually.
-    auto* speaker_enable_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_SPEAKER_ENABLE, GPIO_OWNER_GPIO);
+    auto* speaker_enable_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_SPEAKER_ENABLE, GPIO_FLAG_DIRECTION_OUTPUT, GPIO_OWNER_GPIO);
     check(speaker_enable_pin);
-    auto* headphone_detect_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_HEADPHONE_DETECT, GPIO_OWNER_GPIO);
+    auto* headphone_detect_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_HEADPHONE_DETECT, GPIO_FLAG_DIRECTION_INPUT, GPIO_OWNER_GPIO);
     check(headphone_detect_pin);
-
-    gpio_descriptor_set_flags(speaker_enable_pin, GPIO_FLAG_DIRECTION_OUTPUT);
-    gpio_descriptor_set_flags(headphone_detect_pin, GPIO_FLAG_DIRECTION_INPUT);
 
     gpio_descriptor_set_level(speaker_enable_pin, false);
 
@@ -40,7 +39,7 @@ static void tab5_init_expander0(Device* io_expander0) {
 }
 
 static void tab5_enable_speaker_amp(Device* io_expander0) {
-    auto* speaker_enable_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_SPEAKER_ENABLE, GPIO_OWNER_GPIO);
+    auto* speaker_enable_pin = gpio_descriptor_acquire(io_expander0, GPIO_EXP0_PIN_SPEAKER_ENABLE, GPIO_FLAG_DIRECTION_OUTPUT, GPIO_OWNER_GPIO);
     check(speaker_enable_pin, "Failed to acquire speaker enable pin");
     error_t error = gpio_descriptor_set_level(speaker_enable_pin, true);
     gpio_descriptor_release(speaker_enable_pin);
@@ -67,44 +66,33 @@ static void on_io_expander0_started(Device* device, DeviceEvent event, void* con
 extern "C" {
 
 static error_t start() {
-
-    /* Crash when construct fails, because if a single driver fails to construct,
-     * there is no guarantee that the previously constructed drivers can be destroyed */
-    check(driver_construct_add(&tab5_keyboard_driver) == ERROR_NONE);
-    check(driver_construct_add(&tab5_power_control_driver) == ERROR_NONE);
-
     tab5_detect_start();
-
     tab5_camera_init();
-
     device_listener_add(on_io_expander0_started, nullptr);
-
     tab5_headphone_detect_start();
-
+    tab5_keyboard_attach_detect_start();
     return ERROR_NONE;
 }
 
 static error_t stop() {
+    tab5_keyboard_attach_detect_stop();
     tab5_headphone_detect_stop();
-
     device_listener_remove(on_io_expander0_started);
-
     tab5_detect_stop();
-
-    /* Crash when destruct fails, because if a single driver fails to destruct,
-     * there is no guarantee that the previously destroyed drivers can be recovered */
-    check(driver_remove_destruct(&tab5_keyboard_driver) == ERROR_NONE);
-    check(driver_remove_destruct(&tab5_power_control_driver) == ERROR_NONE);
-
     return ERROR_NONE;
 }
+
+static Driver* const tab5_drivers[] = {
+    &tab5_keyboard_driver,
+    &tab5_power_control_driver,
+    nullptr
+};
 
 Module m5stack_tab5_module = {
     .name = "m5stack-tab5",
     .start = start,
     .stop = stop,
-    .symbols = nullptr,
-    .internal = nullptr
+    .drivers = tab5_drivers
 };
 
 }

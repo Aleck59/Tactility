@@ -71,16 +71,16 @@ static int pin_or_unused(const struct GpioPinSpec& pin) {
 // start()), which makes it fall back to sending a SWRESET command instead - itself a valid and
 // commonly-recommended reset path, so this pulse plus that fallback is redundant-safe, not harmful.
 // Timing (10ms low, 10ms recovery) matches esp_lcd_ili9341's own hardware-reset path exactly.
-static error_t pulse_reset(GpioDescriptor* descriptor, bool active_high) {
+static error_t pulse_reset(GpioDescriptor* descriptor) {
     if (descriptor == nullptr) {
         return ERROR_NONE;
     }
-    error_t error = gpio_descriptor_set_level(descriptor, active_high);
+    error_t error = gpio_descriptor_set_level(descriptor, true);
     if (error != ERROR_NONE) {
         return error;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
-    error = gpio_descriptor_set_level(descriptor, !active_high);
+    error = gpio_descriptor_set_level(descriptor, false);
     if (error != ERROR_NONE) {
         return error;
     }
@@ -117,16 +117,9 @@ static error_t start(Device* device) {
     internal->reset_descriptor = nullptr;
     internal->reset_active_high = config->reset_active_high;
     if (config->pin_reset.gpio_controller != nullptr) {
-        internal->reset_descriptor = gpio_descriptor_acquire(config->pin_reset.gpio_controller, config->pin_reset.pin, GPIO_OWNER_GPIO);
+        internal->reset_descriptor = gpio_descriptor_acquire(config->pin_reset.gpio_controller, config->pin_reset.pin, GPIO_FLAG_DIRECTION_OUTPUT | GPIO_FLAG_ACTIVE_LOW, GPIO_OWNER_GPIO);
         if (internal->reset_descriptor == nullptr) {
             LOG_E(TAG, "Failed to acquire reset GPIO descriptor");
-            vSemaphoreDelete(internal->draw_done_semaphore);
-            free(internal);
-            return ERROR_RESOURCE;
-        }
-        if (gpio_descriptor_set_flags(internal->reset_descriptor, config->pin_reset.flags | GPIO_FLAG_DIRECTION_OUTPUT) != ERROR_NONE) {
-            LOG_E(TAG, "Failed to configure reset pin as output");
-            gpio_descriptor_release(internal->reset_descriptor);
             vSemaphoreDelete(internal->draw_done_semaphore);
             free(internal);
             return ERROR_RESOURCE;
@@ -195,7 +188,7 @@ static error_t start(Device* device) {
     // Every failure path below must clean up fully: unlike stop_device, this is never retried by the kernel
     // if start_device fails (see device_start() in TactilityKernel), so a partial failure here would leak.
     bool ok =
-        pulse_reset(internal->reset_descriptor, internal->reset_active_high) == ERROR_NONE &&
+        pulse_reset(internal->reset_descriptor) == ERROR_NONE &&
         esp_lcd_panel_reset(internal->panel_handle) == ESP_OK &&
         esp_lcd_panel_init(internal->panel_handle) == ESP_OK &&
         (!config->invert_color || esp_lcd_panel_invert_color(internal->panel_handle, true) == ESP_OK);
@@ -263,7 +256,7 @@ static error_t stop(Device* device) {
 
 static error_t ili9341_reset(Device* device) {
     auto* internal = static_cast<Ili9341Internal*>(device_get_driver_data(device));
-    error_t error = pulse_reset(internal->reset_descriptor, internal->reset_active_high);
+    error_t error = pulse_reset(internal->reset_descriptor);
     if (error != ERROR_NONE) {
         return error;
     }
@@ -322,6 +315,21 @@ static bool ili9341_get_mirror_y(Device* device) {
 static error_t ili9341_set_gap(Device* device, int32_t x_gap, int32_t y_gap) {
     auto* internal = static_cast<Ili9341Internal*>(device_get_driver_data(device));
     return esp_lcd_panel_set_gap(internal->panel_handle, x_gap, y_gap) == ESP_OK ? ERROR_NONE : ERROR_RESOURCE;
+}
+
+// Reads the devicetree-configured baseline, not live hardware state - see DisplayApi::get_gap_x().
+// Must match what start() actually programmed into the panel (physical CASET/RASET-space, swapped
+// when swap_xy is set) - lvgl_display.c treats this as the LV_DISPLAY_ROTATION_0 baseline and
+// re-applies it verbatim, so returning the raw unswapped config here would silently clobber
+// start()'s gap back to the wrong axes as soon as a display is bound.
+static int32_t ili9341_get_gap_x(Device* device) {
+    const auto* config = GET_CONFIG(device);
+    return config->swap_xy ? config->gap_y : config->gap_x;
+}
+
+static int32_t ili9341_get_gap_y(Device* device) {
+    const auto* config = GET_CONFIG(device);
+    return config->swap_xy ? config->gap_x : config->gap_y;
 }
 
 static error_t ili9341_invert_color(Device* device, bool invert_color_data) {
@@ -392,6 +400,8 @@ static const DisplayApi ili9341_display_api = {
     .get_mirror_x = ili9341_get_mirror_x,
     .get_mirror_y = ili9341_get_mirror_y,
     .set_gap = ili9341_set_gap,
+    .get_gap_x = ili9341_get_gap_x,
+    .get_gap_y = ili9341_get_gap_y,
     .invert_color = ili9341_invert_color,
     .disp_on_off = ili9341_disp_on_off,
     .disp_sleep = ili9341_disp_sleep,
