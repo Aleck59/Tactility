@@ -3,8 +3,8 @@
 
 extern "C" {
 
-struct Module m5stack_cores3_module = {
-    .name = "m5stack-cores3",
+Module elecrow_crowpanel_basic_70_module = {
+    .name = "elecrow-crowpanel-basic-70",
     .start = [] -> error_t { return ERROR_NONE; },
     .stop = [] -> error_t { return ERROR_NONE; },
     .symbols = nullptr,

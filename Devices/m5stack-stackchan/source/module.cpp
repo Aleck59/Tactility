@@ -56,7 +56,9 @@ static error_t stop() {
 Module m5stack_stackchan_module = {
     .name = "m5stack-stackchan",
     .start = start,
-    .stop = stop
+    .stop = stop,
+    .symbols = nullptr,
+    .internal = nullptr
 };
 
 }
