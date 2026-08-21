@@ -1,6 +1,6 @@
 #include <Tactility/bluetooth/BluetoothPairedDevice.h>
 
-#include "Tactility/Paths.h"
+#include "Tactility/DeprecatedPaths.h"
 
 #include <Tactility/file/File.h>
 #include <Tactility/file/PropertiesFile.h>
@@ -25,7 +25,7 @@ constexpr auto* KEY_AUTO_CONNECT = "autoConnect";
 constexpr auto* KEY_PROFILE_ID  = "profileId";
 
 static std::string getSettingsFilePath() {
-    return getUserDataPath() + "/service/bluetooth";
+    return getDataPath() + "/service/bluetooth";
 }
 
 std::string addrToHex(const std::array<uint8_t, 6>& addr) {

@@ -1,9 +1,9 @@
 #include <Tactility/bluetooth/BluetoothSettings.h>
 
+#include <Tactility/DeprecatedPaths.h>
+#include <Tactility/Mutex.h>
 #include <Tactility/file/File.h>
 #include <Tactility/file/PropertiesFile.h>
-#include <Tactility/Mutex.h>
-#include <Tactility/Paths.h>
 #include <tactility/log.h>
 
 namespace tt::bluetooth::settings {
@@ -11,7 +11,7 @@ namespace tt::bluetooth::settings {
 constexpr auto* TAG = "BluetoothSettings";
 
 static std::string getSettingsPath() {
-    return getUserDataPath() + "/settings/bluetooth.settings";
+    return getDataPath() + "/settings/bluetooth.properties";
 }
 
 constexpr auto* KEY_ENABLE_ON_BOOT    = "enableOnBoot";

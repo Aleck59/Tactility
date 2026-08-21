@@ -2,9 +2,10 @@
 #define LV_USE_PRIVATE_API 1 // For actual lv_obj_t declaration
 
 #include <lvgl/widgets/toolbar.h>
-#include <lvgl/widgets/spinner.h>
+
 #include <lvgl/fonts.h>
 #include <lvgl/lvgl.h>
+#include <lvgl/widgets/spinner.h>
 
 #include <tactility/check.h>
 #include <tactility/drivers/pointer.h>
@@ -160,7 +161,9 @@ lv_obj_t* lvgl_toolbar_create(lv_obj_t* parent, const char* title) {
     // In that scenario we want to automatically have the close button selected so the user doesn't have to press the widget selection
     // an extra time for every screen.
     if (!device_has_active_by_type(&POINTER_TYPE)) {
+        lv_obj_update_layout(obj); // Resolve flex layout first, so focus/state invalidate against final coords
         lv_group_focus_obj(toolbar->close_button);
+        lv_obj_add_state(toolbar->close_button, LV_STATE_FOCUS_KEY);
     }
 
     return obj;
@@ -229,6 +232,29 @@ lv_obj_t* lvgl_toolbar_add_switch_action(lv_obj_t* obj) {
     lv_obj_set_style_pad_hor(wrapper, 4, LV_STATE_DEFAULT);
 
     lv_obj_t* widget = lv_switch_create(wrapper);
+    lv_obj_set_align(widget, LV_ALIGN_CENTER);
+
+    return widget;
+}
+
+lv_obj_t* lvgl_toolbar_add_dropdown_action(lv_obj_t* obj, const char* options, lv_coord_t width, const char* text) {
+    auto* toolbar = reinterpret_cast<Toolbar*>(obj);
+    check(toolbar->action_count < TOOLBAR_ACTION_LIMIT, "max actions reached");
+    toolbar->action_count++;
+
+    auto ui_density = lvgl_get_ui_density();
+    auto* wrapper = create_action_wrapper(toolbar->action_container, ui_density);
+    lv_obj_set_style_pad_hor(wrapper, 4, LV_STATE_DEFAULT);
+
+    lv_obj_t* widget = lv_dropdown_create(wrapper);
+    lv_dropdown_set_options(widget, options);
+    lv_dropdown_set_selected_highlight(widget, false);
+    if (width > 0) {
+        lv_obj_set_width(widget, width);
+    }
+    if (text != nullptr) {
+        lv_dropdown_set_text(widget, text);
+    }
     lv_obj_set_align(widget, LV_ALIGN_CENTER);
 
     return widget;

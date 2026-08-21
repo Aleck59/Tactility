@@ -13,10 +13,21 @@
 
 ## Higher Priority
 
+- AppEventSubscription, SystemEventSubscription: should use TaskHandle_t notification. That way, there can be a single wait event for a task instead of X separate ones with each their timeout.
+- AppHubApp: Prevent download callbacks from accessing a destroyed view.
+- Move USB host task stacks to SPIRAM when available: esp32_usbhost*.cpp
+- wifi: wifi_add_event_callback() and wifi_remove_event_callback() should be replaced by a subscribe/await pattern like system events.
+  When that's changed reduce LVGL callstack size in Tactility.cpp run()
+- Make it more clear to end-users that an SD card is required to run Tactility
+- Make it possible to override stack size for an app via config file (loaded at boot), and make it possible to set preferred memory location (e.g. internal/external)
+- Wrap file operations like fopen/fclose with file_mutex
+- Add bold fonts for e-ink readability improvement
+- Httpd.cpp: warn if running on same CPU core (or task) as UI/LVGL/window manager.
+- Improve Setup: Show "Step done" screen
+- Improve Setup: Add keyboard/keypad navigation explanation
 - display.h API: get_backlight does not change ref counting, but it should
 - bluetooth: various getters for child devices do not change ref counting, but they should
 - Improve kernel_init.cpp (and other modules): create driver_ensure_added() and driver_ensure_destructed()
-- Remove and migrate `Include/Tactility/kernel/Kernel.h` into `tactility/delay.h`
 - Drivers/audio-codec-module is not a module. Move it somewhere else. Or make it an actual module.
 - LilyGO T-Dongle S3: 1 button control, stop auto-launching web server
 - Core2: support power off via software
@@ -24,7 +35,6 @@
 - Get rid of TactilityC in favour of TactilityKernel and kernel modules
 - Improve SPI kernel driver (implement read, write, transactions)
 - Add font design tokens such as "regular", "title" and "smaller". Perhaps via the LVGL kernel module.
-- Kernel concepts for ELF loading (generic approach for GUI apps, console apps, libraries).
 - Fix glitches when installing app via App Hub with 4.3" Waveshare
 - TCA9534 keyboards should use interrupts
 - External app loading: Check the version of Tactility and check ESP target hardware to check for compatibility
@@ -39,21 +49,22 @@
 
 ## Medium Priority
 
-- Implement a LED kernel driver (single colour and RGB, plain GPIO and PWM)
+- `struct Driver` has an `.owner`, but it's not always set. Either validate on Module construct that it matches, or otherwise set it during module start. The problem: NULL parent currently means that driver is not removable. This clashes with setting it dynamically. Consider some kind of flag to determine removability.
+- Consider moving certain drivers into separate modules: audio, bt, wifi, etc
+- Consider using https://github.com/Graphify-Labs/graphify
+- Consider implementing LVGL gridnav in apps https://lvgl.io/docs/open/9.3/details/auxiliary-modules/gridnav.html
 - Make USB host driver disabled by default, so it doesn't consume memory
-- Filtering for apps in App Hub:
-  - apps that only work on a specific device
 - Diceware app has large "+" and "-' buttons on Cardputer. It should be smaller.
-- Create PwmRgbLedDevice class and implement it for all CYD devices
 - TactilityTool: Make API compatibility table (and check for compatibility in the tool itself)
 - Improve EspLcdDisplay to contain all the standard configuration options, and implement a default init function. Add a configuration class.
-- Make WiFi setup app that starts an access point and hosts a webpage to set up the device.
-  This will be useful for devices without a screen, a small screen or a non-touch screen.
 - Unify the way displays are dimmed. Some implementations turn off the display when it's fully dimmed. Make this a separate functionality.
 - Bug: Crash handling app cannot be exited with an EncoderDevice. (current work-around is to manually reset the device)
 
 ## Lower Priority
 
+- lvgl-module has a keyboard.cpp that creates a `keyboard_group`. This group is set as the default group, so it can also work with trackball(= LVGL "encoder").
+  Make a separate group that is the default group. The keyboard can then use it (or use its own).
+  The basic idea is to invert the ownership: now the keyboard group is made the default group, but it's probably more logical to have the default group used by the keyboard.
 - lvgl-module's spinner relies on hard-coded spinner asset from Tactility main project.
 - Localize all apps
 - Support hot-plugging SD card (note: this is not possible if they require the CS pin hack)
@@ -73,6 +84,8 @@
 - Calculator app should show regular text input field on non-touch devices that have a keyboard (Cardputer, T-Lora Pager)
 - Allow for WSAD keys to navigate LVGL (this is extra nice for cardputer, but just handy in general)
 - Create a "How to" app for a device. It could explain things like keyboard navigation on first start.
+- Make WiFi setup app that starts an access point and hosts a webpage to set up the device.
+  This will be useful for devices without a screen, a small screen or a non-touch screen.
 
 # Nice-to-haves
 
@@ -93,7 +106,6 @@
 - Weather app: https://lab.flipper.net/apps/flip_weather
 - wget app: https://lab.flipper.net/apps/web_crawler (add profiles for known public APIs?)
 - Chip 8 emulator
-- BadUSB (in December 2024, TinyUSB has a bug where uninstalling and re-installing the driver fails)
 - Discord bot
 - IR transceiver app
 - GPS app

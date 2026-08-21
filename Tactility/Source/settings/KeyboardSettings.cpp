@@ -1,7 +1,7 @@
 #include <Tactility/settings/KeyboardSettings.h>
 #include <Tactility/file/File.h>
 #include <Tactility/file/PropertiesFile.h>
-#include <Tactility/Paths.h>
+#include <Tactility/DeprecatedPaths.h>
 
 #include <map>
 #include <string>
@@ -9,7 +9,7 @@
 namespace tt::settings::keyboard {
 
 static std::string getSettingsFilePath() {
-    return getUserDataPath() + "/settings/keyboard.properties";
+    return getDataPath() + "/settings/keyboard.properties";
 }
 
 constexpr auto* KEY_BACKLIGHT_ENABLED = "backlightEnabled";

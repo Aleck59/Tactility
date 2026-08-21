@@ -9,7 +9,7 @@
 #include <Tactility/file/File.h>
 #include <Tactility/service/wifi/WifiApSettings.h>
 
-#include <Tactility/Paths.h>
+#include <Tactility/DeprecatedPaths.h>
 #include <Tactility/Tactility.h>
 
 #include <tactility/log.h>
@@ -126,7 +126,7 @@ void bootSplashInit() {
     getMainDispatcher().dispatch([] {
         LOG_I(TAG, "bootSplashInit dispatch begin");
         // Import any provisioning files placed on the system data partition.
-        const std::string provisioning_path = file::getChildPath(getUserDataPath(), "provisioning");
+        const std::string provisioning_path = file::getChildPath(getDataPath(), "provisioning");
         if (file::isDirectory(provisioning_path)) {
             importWifiApSettingsFromDir(provisioning_path);
         } else {

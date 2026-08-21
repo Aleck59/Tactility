@@ -2,7 +2,7 @@
 
 #include <Tactility/file/File.h>
 #include <Tactility/file/PropertiesFile.h>
-#include <Tactility/Paths.h>
+#include <Tactility/DeprecatedPaths.h>
 
 #include <cstdlib>
 #include <cerrno>
@@ -13,7 +13,7 @@
 namespace tt::settings::touch {
 
 static std::string getSettingsFilePath() {
-    return getUserDataPath() + "/settings/touch-calibration.properties";
+    return getDataPath() + "/settings/touch-calibration.properties";
 }
 
 constexpr auto* SETTINGS_KEY_ENABLED = "enabled";

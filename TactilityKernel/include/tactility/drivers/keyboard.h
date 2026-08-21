@@ -43,6 +43,20 @@ struct KeyboardKeyData {
      * separately. Drivers whose hardware cannot report Alt leave this false.
      */
     bool alt;
+    /**
+     * @brief Standard USB HID keyboard usage code for this key (USB HID Usage Tables, page 0x07),
+     * or 0 if this driver doesn't compute one (most don't - `key` is the only field most consumers
+     * need). Populated by drivers whose hardware layout maps cleanly onto HID usage codes, so
+     * consumers that want to mirror physical key presses as real HID reports (e.g. USB HID output)
+     * don't have to reverse-engineer one out of `key`'s LVGL/ASCII encoding - which is lossy for
+     * keys with no ASCII/LVGL representation at all, e.g. F1-F12.
+     */
+    uint8_t hid_keycode;
+    /**
+     * @brief HID modifier bitmask (report byte 0: bit0=LeftCtrl, bit1=LeftShift, bit2=LeftAlt,
+     * bit3=LeftGui, bit4-7=Right variants) matching hid_keycode, or 0 if hid_keycode is 0.
+     */
+    uint8_t hid_modifier;
 };
 
 /**
@@ -66,6 +80,17 @@ struct KeyboardApi {
      * @retval ERROR_NOT_SUPPORTED when this device has no backlight
      */
     error_t (*get_backlight)(struct Device* device, struct Device** backlight_device);
+
+    /**
+     * @brief Optional: reports whether the keyboard is physically present right now. Only
+     * meaningful for hot-pluggable/detachable keyboards (e.g. a removable accessory) whose
+     * kernel device is constructed and started once at boot regardless of physical attachment -
+     * leave NULL for a keyboard that's always physically present whenever its device is active
+     * (the common case; callers must treat NULL the same as "always present").
+     * @param[in] device the keyboard device
+     * @return true if physically attached/present
+     */
+    bool (*is_present)(struct Device* device);
 };
 
 /**
@@ -82,6 +107,14 @@ error_t keyboard_read_key(struct Device* device, struct KeyboardKeyData* data);
  * @retval ERROR_NOT_SUPPORTED when this device has no backlight
  */
 error_t keyboard_get_backlight(struct Device* device, struct Device** backlight_device);
+
+/**
+ * @brief Whether the keyboard device is physically present right now. True when the driver
+ * doesn't implement KeyboardApi::is_present (i.e. it's always physically present whenever its
+ * device is active) - see that field's doc comment.
+ * @param[in] device the keyboard device
+ */
+bool keyboard_is_present(struct Device* device);
 
 extern const struct DeviceType KEYBOARD_TYPE;
 
