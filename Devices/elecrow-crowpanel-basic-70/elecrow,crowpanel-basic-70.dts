@@ -121,4 +121,12 @@
 		pin-tx = <&gpio0 43 GPIO_FLAG_NONE>;
 		pin-rx = <&gpio0 44 GPIO_FLAG_NONE>;
 	};
+
+	usbdevice0 {
+			compatible = "espressif,esp32-usbdevice";
+	
+			usbdevicemsc0 {
+				compatible = "espressif,esp32-usbdevice-msc";
+		};
+	};
 };
