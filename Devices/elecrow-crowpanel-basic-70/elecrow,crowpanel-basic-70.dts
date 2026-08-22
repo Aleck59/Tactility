@@ -8,7 +8,6 @@
 #include <tactility/bindings/esp32_i2s.h>
 #include <tactility/bindings/esp32_spi.h>
 #include <tactility/bindings/esp32_uart.h>
-#include <tactility/bindings/esp32_usbdevice.h>
 #include <tactility/bindings/esp32_sdspi.h>
 #include <tactility/bindings/esp32_pwm_ledc.h>
 #include <tactility/bindings/pwm_backlight.h>
@@ -139,11 +138,5 @@
 		pin-rx = <&gpio0 44 GPIO_FLAG_NONE>;
 	};
 
-	usbdevice0 {
-			compatible = "espressif,esp32-usbdevice";
-	
-			usbdevicemsc0 {
-				compatible = "espressif,esp32-usbdevice-msc";
-		};
-	};
+
 };
